@@ -1,12 +1,15 @@
 package com.qiniu.pili.droid.streaming.demo.activity;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.FragmentTransaction;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.graphics.Rect;
+import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.media.AudioFormat;
 import android.media.MediaRecorder;
@@ -62,10 +65,11 @@ import com.qiniu.pili.droid.streaming.microphone.AudioMixer;
 import com.qiniu.pili.droid.streaming.microphone.OnAudioMixListener;
 
 import com.texeljoy.ht_effect.HTPanelLayout;
+import com.texeljoy.ht_effect.utils.RGBAToNV21Renderer;
 import com.texeljoy.hteffect.HTEffect;
 import com.texeljoy.hteffect.model.HTRotationEnum;
-import com.texeljoy.hteffect.renderer.RGBAToNV21Renderer;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -137,6 +141,8 @@ public class AVStreamingActivity extends FragmentActivity implements
     byte[] swData;//软编的时候使用
     RGBAToNV21Renderer rgbaToNV21Renderer;//软编的时候使用
     boolean isRenderInit = false;
+    int mPreviewWidth;
+    int mPreviewHeight;
     //todo --- hteffect end ---
 
     @Override
@@ -167,66 +173,8 @@ public class AVStreamingActivity extends FragmentActivity implements
         // 初始化 MediaStreamingManager，使用姿势可参考 https://developer.qiniu.com/pili/sdk/3719/PLDroidMediaStreaming-function-using#6
         initStreamingManager();
 
-        //todo --- hteffect start ---
-        //处理硬编接口
-        mMediaStreamingManager.setSurfaceTextureCallback(new SurfaceTextureCallback() {
-            @Override public void onSurfaceCreated() {
 
-            }
 
-            @Override public void onSurfaceChanged(int i, int i1) {
-                HTEffect.shareInstance().releaseTextureOESRenderer();
-                isRenderInit = false;
-                if (rgbaToNV21Renderer != null) {
-                    rgbaToNV21Renderer.destroy();
-                    rgbaToNV21Renderer = null;
-                }
-
-            }
-
-            @Override public void onSurfaceDestroyed() {
-                HTEffect.shareInstance().releaseTextureOESRenderer();
-                isRenderInit = false;
-                if (rgbaToNV21Renderer != null) {
-                    rgbaToNV21Renderer.destroy();
-                    rgbaToNV21Renderer = null;
-                }
-
-            }
-
-            @Override public int onDrawFrame(int texId, int width, int height, float[] floats) {
-                if(!isRenderInit){
-                    isRenderInit = HTEffect.shareInstance().initTextureOESRenderer(width,height,
-                        mCurrentCamFacingIndex == CameraStreamingSetting.CAMERA_FACING_ID.CAMERA_FACING_BACK.ordinal() ? HTRotationEnum.HTRotationClockwise90: HTRotationEnum.HTRotationClockwise270,
-                        mCurrentCamFacingIndex == CameraStreamingSetting.CAMERA_FACING_ID.CAMERA_FACING_FRONT.ordinal(),5);
-                }
-
-                int texture2d = HTEffect.shareInstance().processTextureOES(texId);
-
-                if (swData == null) {
-                    swData = new byte[width * height * 3 / 2];
-                }
-                if (rgbaToNV21Renderer == null) {
-                    rgbaToNV21Renderer = new RGBAToNV21Renderer(width, height);
-                    rgbaToNV21Renderer.create();
-                }
-
-                rgbaToNV21Renderer.render(texture2d, ByteBuffer.wrap(swData));
-                return texture2d;
-            }
-        });
-
-        //软编的时候使用如下方法
-        mMediaStreamingManager.setStreamingPreviewCallback(new StreamingPreviewCallback() {
-            @Override
-            public boolean onPreviewFrame(byte[] bytes, int width, int height, int rotation, int fmt, long tsInNanoTime) {
-                if (swData != null)
-                    System.arraycopy(swData, 0, bytes, 0, bytes.length);
-                return true;
-            }
-        });
-
-        //todo --- hteffect end ---
 
     }
 
@@ -1195,6 +1143,7 @@ public class AVStreamingActivity extends FragmentActivity implements
      *
      * 软编模式下，接入自定义美颜需要注册此回调并处理 YUV 的数据
      */
+    //todo --- hteffect start ---
     private StreamingPreviewCallback mStreamingPreviewCallback = new StreamingPreviewCallback() {
         @Override
         public boolean onPreviewFrame(byte[] bytes, int width, int height, int rotation, int fmt, long tsInNanoTime) {
@@ -1212,6 +1161,11 @@ public class AVStreamingActivity extends FragmentActivity implements
              * 例如: byte[] beauties = readPixelsFromGPU();
              * System.arraycopy(beauties, 0, bytes, 0, bytes.length);
              */
+            if (swData != null
+                // && swData.length == bytes.length
+            ) {
+                System.arraycopy(swData, 0, bytes, 0, bytes.length);
+            }
             return true;
         }
     };
@@ -1242,7 +1196,15 @@ public class AVStreamingActivity extends FragmentActivity implements
         @Override
         public void onSurfaceChanged(int width, int height) {
             Log.i(TAG, "onSurfaceChanged width:" + width + ",height:" + height);
-            mFBO.updateSurfaceSize(width, height);
+            isRenderInit = false;
+
+            if (rgbaToNV21Renderer != null) {
+                rgbaToNV21Renderer.destroy();
+                rgbaToNV21Renderer = null;
+            }
+
+            // mFBO.updateSurfaceSize(width, height);
+            HTEffect.shareInstance().releaseTextureOESRenderer();
         }
 
         /**
@@ -1251,7 +1213,13 @@ public class AVStreamingActivity extends FragmentActivity implements
         @Override
         public void onSurfaceDestroyed() {
             Log.i(TAG, "onSurfaceDestroyed");
-            mFBO.release();
+             HTEffect.shareInstance().releaseTextureOESRenderer();
+            isRenderInit = false;
+            if (rgbaToNV21Renderer != null) {
+                rgbaToNV21Renderer.destroy();
+                rgbaToNV21Renderer = null;
+            }
+            // mFBO.release();
         }
 
         /**
@@ -1265,10 +1233,38 @@ public class AVStreamingActivity extends FragmentActivity implements
          */
         @Override
         public int onDrawFrame(int texId, int width, int height, float[] transformMatrix) {
-            Log.i(TAG, "onDrawFrame : " + Thread.currentThread().getId());
-            return mFBO.drawFrame(texId, width, height);
+            Log.i(TAG, "onDrawFrame : " + Thread.currentThread().getId()+","+ width + "x" + height);
+            if(!isRenderInit){
+                isRenderInit = HTEffect.shareInstance().initTextureOESRenderer(width,height,
+                    mCurrentCamFacingIndex == CameraStreamingSetting.CAMERA_FACING_ID.CAMERA_FACING_BACK.ordinal() ? HTRotationEnum.HTRotationClockwise90: HTRotationEnum.HTRotationClockwise270,
+                    mCurrentCamFacingIndex == CameraStreamingSetting.CAMERA_FACING_ID.CAMERA_FACING_FRONT.ordinal(),5);
+            }
+
+            int texture2d = HTEffect.shareInstance().processTextureOES(texId);
+
+            if((mPreviewHeight != height) || (mPreviewWidth != width)){
+                swData = null;
+                rgbaToNV21Renderer = null;
+                mPreviewWidth = width;
+                mPreviewHeight = height;
+            }
+
+            if (swData == null) {
+                swData = new byte[width * height * 3 / 2];
+            }
+            if (rgbaToNV21Renderer == null) {
+                rgbaToNV21Renderer = new RGBAToNV21Renderer(width, height);
+                rgbaToNV21Renderer.create();
+            }
+
+            rgbaToNV21Renderer.render(texture2d, ByteBuffer.wrap(swData));
+
+            return texture2d;
+
         }
     };
+    //todo --- hteffect end ---
+
 
     /**
      * 在图片推流过程中切换图片，仅供 demo 演示，您可以根据产品定义自行实现
